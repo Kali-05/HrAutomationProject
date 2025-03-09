@@ -22,3 +22,6 @@ hr-automation-backend/.env
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+hr-automation-backend\node_modules
+hr-automation-backend\.env
+hr-automation-frontend\node_modules
