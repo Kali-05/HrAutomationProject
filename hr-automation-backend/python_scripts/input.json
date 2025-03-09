@@ -1,0 +1,8 @@
+{
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "phone": "N/A",
+    "skills": ["N/A"],
+    "education": ["N/A"],
+    "experience": ["N/A"]
+  }
