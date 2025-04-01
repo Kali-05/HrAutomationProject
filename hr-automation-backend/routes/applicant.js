@@ -131,10 +131,57 @@
 
 // module.exports = router;
 
+
+// router.get("/questions", async (req, res) => {
+//     try {
+//       const authHeader = req.headers.authorization;
+//       const token = authHeader.split(" ")[1];
+//       const decoded = jwt.verify(token, process.env.JWT_SECRET);
+  
+//       const applicant = await Applicant.findById(decoded.id);
+//       if (!applicant) {
+//         return res.status(404).json({ error: "Applicant not found" });
+//       }
+  
+//       // Fetch session to get job description
+//       const session = await Session.findOne({ applicants: applicant._id });
+//       const jobDescription = session ? session.jobDescription : "Generic job description";
+  
+//       const extractedData = applicant.extractedData || { ... };
+//       const inputData = JSON.stringify({ extracted_data: extractedData, job_description: jobDescription });
+  
+//       const pythonProcess = spawn("python", [
+//         path.join(__dirname, "../python_scripts/generate_questions.py"),
+//       ]);
+  
+//       pythonProcess.stdin.write(inputData + "\n");
+//       pythonProcess.stdin.end();
+  
+//       let questionsResult = "";
+//       for await (const chunk of pythonProcess.stdout) {
+//         questionsResult += chunk.toString();
+//       }
+  
+//       pythonProcess.on("close", (code) => {
+//         if (code !== 0) {
+//           console.error("Python process exited with code:", code, "Output:", questionsResult);
+//           return res.status(500).json({ error: "Failed to generate questions" });
+//         }
+//         let questions = JSON.parse(questionsResult);
+//         applicant.questions = questions;
+//         await applicant.save(); // Ensure async save
+//         res.json({ questions });
+//       });
+//     } catch (err) {
+//       console.error("Get questions error:", err.message);
+//       res.status(401).json({ error: "Invalid token" });
+//     }
+//   });
 const express = require("express");
 const jwt = require("jsonwebtoken");
 const Applicant = require("../models/Applicant");
 const { spawn } = require("child_process");
+const Session = require("../models/Session"); // Add this line
 const path = require("path");
 require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
 
@@ -144,120 +191,115 @@ router.get("/test", (req, res) => {
   res.send("Applicant test route working");
 });
 
+// router.post("/login", async (req, res) => {
+//   try {
+//     const { email, password } = req.body;
+//     if (!email || !password) {
+//       return res.status(400).json({ error: "Email and password are required" });
+//     }
+
+//     const applicant = await Applicant.findOne({ email });
+//     if (!applicant) {
+//       return res.status(401).json({ error: "Invalid email or password" });
+//     }
+
+//     const isMatch = await applicant.comparePassword(password);
+//     if (!isMatch) {
+//       return res.status(401).json({ error: "Invalid email or password" });
+//     }
+
+//     const token = jwt.sign(
+//       { id: applicant._id, email: applicant.email },
+//       process.env.JWT_SECRET,
+//       { expiresIn: "1h" }
+//     );
+
+//     res.json({
+//       success: true,
+//       token,
+//       applicant: {
+//         email: applicant.email,
+//         name: applicant.extractedData.name,
+//         questions: applicant.questions,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("Login error:", err.message);
+//     res.status(500).json({ error: "Failed to log in" });
+//   }
+// });
 router.post("/login", async (req, res) => {
-  try {
-    const { email, password } = req.body;
-    if (!email || !password) {
-      return res.status(400).json({ error: "Email and password are required" });
+    try {
+        const { email, password } = req.body;
+        console.log("Login attempt with:", { email, password });
+
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
+
+        const applicant = await Applicant.findOne({ email });
+        console.log("Found applicant:", applicant ? applicant.email : "none");
+        if (!applicant) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const isMatch = applicant.password === password; // Direct comparison
+        console.log("Password match:", isMatch, "Stored:", applicant.password, "Provided:", password);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const token = jwt.sign(
+            { id: applicant._id, email: applicant.email },
+            process.env.JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
+        res.json({
+            success: true,
+            token,
+            applicant: {
+                email: applicant.email,
+                name: applicant.resumeData?.name || "Applicant",
+                questions: applicant.questions,
+            },
+        });
+    } catch (err) {
+        console.error("Login error:", err.message);
+        res.status(500).json({ error: "Failed to log in" });
     }
-
-    const applicant = await Applicant.findOne({ email });
-    if (!applicant) {
-      return res.status(401).json({ error: "Invalid email or password" });
-    }
-
-    const isMatch = await applicant.comparePassword(password);
-    if (!isMatch) {
-      return res.status(401).json({ error: "Invalid email or password" });
-    }
-
-    const token = jwt.sign(
-      { id: applicant._id, email: applicant.email },
-      process.env.JWT_SECRET,
-      { expiresIn: "1h" }
-    );
-
-    res.json({
-      success: true,
-      token,
-      applicant: {
-        email: applicant.email,
-        name: applicant.extractedData.name,
-        questions: applicant.questions,
-      },
-    });
-  } catch (err) {
-    console.error("Login error:", err.message);
-    res.status(500).json({ error: "Failed to log in" });
-  }
 });
+
 
 router.get("/questions", async (req, res) => {
-  try {
-    const authHeader = req.headers.authorization;
-    console.log("Authorization header:", authHeader);
-    if (!authHeader || !authHeader.startsWith("Bearer ")) {
-      return res.status(401).json({ error: "No valid token provided" });
-    }
-
-    const token = authHeader.split(" ")[1];
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    console.log("Decoded token:", decoded);
-
-    const applicant = await Applicant.findById(decoded.id);
-    if (!applicant) {
-      return res.status(404).json({ error: "Applicant not found" });
-    }
-
-    const extractedData = applicant.extractedData || {
-      name: applicant.name || "Unknown",
-      email: applicant.email || "unknown@example.com",
-      phone: "N/A",
-      skills: ["N/A"],
-      education: ["N/A"],
-      experience: ["N/A"],
-    };
-    const inputData = JSON.stringify(extractedData);
-    console.log("Sending input data to Python script:", inputData);
-
-    const pythonProcess = spawn("python", [
-      path.join(__dirname, "../python_scripts/generate_questions.py"),
-    ]);
-
-    pythonProcess.stdin.write(inputData + "\n");
-    pythonProcess.stdin.end();
-
-    let questionsResult = "";
-    for await (const chunk of pythonProcess.stdout) {
-      questionsResult += chunk.toString();
-    }
-
-    pythonProcess.on("error", (err) => {
-      console.error("Python error:", err.message);
-      res.status(500).json({ error: "Failed to generate questions" });
-    });
-
-    pythonProcess.on("close", (code) => {
-      if (code !== 0) {
-        console.error("Python process exited with code:", code, "Output:", questionsResult);
-        return res.status(500).json({ error: "Failed to generate questions" });
+    try {
+      const authHeader = req.headers.authorization;
+      console.log("Authorization header:", authHeader);
+      if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "No valid token provided" });
       }
-      let questions;
-      try {
-        questions = JSON.parse(questionsResult);
-        if (questions.error) {
-          console.error("Script returned error:", questions.error);
-          return res.status(500).json({ error: questions.error });
-        }
-        if (!Array.isArray(questions)) {
-          throw new Error("Expected an array of questions");
-        }
-      } catch (e) {
-        console.error("Invalid question data:", e.message, "Raw output:", questionsResult);
-        return res.status(500).json({ error: "Invalid question data" });
+  
+      const token = authHeader.split(" ")[1];
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      console.log("Decoded token:", decoded);
+  
+      const applicant = await Applicant.findById(decoded.id);
+      if (!applicant) {
+        return res.status(404).json({ error: "Applicant not found" });
       }
-
-      applicant.questions = questions;
-      applicant.save();
-
-      res.json({ questions });
-    });
-  } catch (err) {
-    console.error("Get questions error:", err.message);
-    res.status(401).json({ error: "Invalid token" });
-  }
-});
-
+  
+      // Fetch questions from the database
+      if (!applicant.questions || applicant.questions.length === 0) {
+        return res.status(400).json({ error: "No questions available for this applicant" });
+      }
+  
+      console.log("Fetched questions from DB:", applicant.questions);
+      res.json({ questions: applicant.questions });
+    } catch (err) {
+      console.error("Get questions error:", err.message);
+      res.status(500).json({ error: "Server error" });
+    }
+  });
 router.post("/submit-exam", async (req, res) => {
     try {
       const authHeader = req.headers.authorization;
@@ -353,28 +395,34 @@ router.post("/submit-exam", async (req, res) => {
   });
 
   // Add the /results endpoint
+  // hr-automation-backend/routes/applicant.js (updated /results endpoint)
 router.get("/results", async (req, res) => {
-    try {
+  try {
       const authHeader = req.headers.authorization;
       if (!authHeader || !authHeader.startsWith("Bearer ")) {
-        return res.status(401).json({ error: "No valid token provided" });
+          return res.status(401).json({ error: "No valid token provided" });
       }
-  
+
       const token = authHeader.split(" ")[1];
       const decoded = jwt.verify(token, process.env.JWT_SECRET);
       console.log("Decoded HR token for results:", decoded);
-  
-      // Optionally add role-based authorization
-      // if (decoded.role !== "hr") {
-      //   return res.status(403).json({ error: "Unauthorized access" });
-      // }
-  
-      const applicants = await Applicant.find({}, "email totalScore").sort({ totalScore: -1 });
+
+      if (!decoded.role || decoded.role !== "hr") {
+          return res.status(403).json({ error: "Unauthorized access" });
+      }
+
+      const applicants = await Applicant.find({}, "email totalScore _id").sort({ totalScore: -1 });
       res.json({ applicants });
-    } catch (err) {
+  } catch (err) {
       console.error("Get results error:", err.message);
+      if (err.name === "TokenExpiredError") {
+          return res.status(401).json({ error: "Token expired. Please log in again." });
+      }
+      if (err.name === "JsonWebTokenError") {
+          return res.status(401).json({ error: "Invalid token. Please log in again." });
+      }
       res.status(500).json({ error: "Failed to fetch results" });
-    }
-  });
+  }
+});
 
 module.exports = router;

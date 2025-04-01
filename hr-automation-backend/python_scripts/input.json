@@ -1,8 +1,10 @@
 {
+  "extracted_data": {
     "name": "John Doe",
-    "email": "john.doe@example.com",
-    "phone": "N/A",
-    "skills": ["N/A"],
-    "education": ["N/A"],
-    "experience": ["N/A"]
-  }
+    "skills": ["Python", "Machine Learning", "Cloud Computing"],
+    "experience": ["Software Engineer at XYZ Corp"],
+    "education": ["B.Tech in Computer Science"],
+    "projects": ["AI-based Resume Analyzer"]
+  },
+  "job_description": "Looking for a software engineer with expertise in Python, AI, and cloud computing."
+}

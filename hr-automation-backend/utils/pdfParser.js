@@ -1,90 +1,126 @@
 const pdf = require("pdf-parse");
 const { spawn } = require("child_process");
+const path = require("path");
 
-const parseResume = async (pdfBuffer) => {
+const parseResume = async (pdfBuffer, jobDescription) => {
     try {
-        // Extract text using pdf-parse
+        // Extract text from PDF
         const data = await pdf(pdfBuffer);
-        const text = data.text;
+        const text = data.text.trim();
         console.log("Extracted text length:", text.length);
 
-        // Extract information
-        const extractProcess = spawn("python", ["python_scripts/extract_resume_info.py"]);
+        if (!text) {
+            console.error("No text extracted from PDF");
+            return {
+                extractedData: null,
+                questions: [],
+            };
+        }
+
+        // Spawn Python process to extract resume information
+        const extractProcess = spawn("python", [
+            path.join(__dirname, "../python_scripts/extract_resume_info.py"),
+        ]);
+
         let extractOutput = "";
+        let extractError = "";
+
         extractProcess.stdout.on("data", (data) => {
             extractOutput += data.toString();
-            console.log("Extract stdout:", data.toString());
+            console.log("Extract stdout:", data.toString().trim());
         });
+
         extractProcess.stderr.on("data", (data) => {
-            console.error("Extract error:", data.toString());
+            extractError += data.toString();
+            console.error("Extract stderr:", data.toString().trim());
         });
 
         extractProcess.stdin.write(text);
         extractProcess.stdin.end();
 
-        const extractResult = await new Promise((resolve, reject) => {
+        const extractedData = await new Promise((resolve, reject) => {
             extractProcess.on("close", (code) => {
                 if (code === 0) {
                     try {
-                        const parsedData = JSON.parse(extractOutput);
-                        console.log("Parsed extracted data:", parsedData); // Debug log
+                        const lines = extractOutput.split("\n").filter(line => line.trim());
+                        const jsonLine = lines.find(line => line.trim().startsWith("{"));
+                        if (!jsonLine) {
+                            throw new Error("No valid JSON found in output");
+                        }
+                        const parsedData = JSON.parse(jsonLine);
+                        console.log("Parsed extracted data:", parsedData);
                         resolve(parsedData);
                     } catch (err) {
-                        reject(new Error("Failed to parse extract JSON: " + err.message));
+                        console.error("Failed to parse extract JSON:", err.message);
+                        resolve(null);
                     }
                 } else {
-                    reject(new Error(`Extract script exited with code ${code}`));
+                    console.error(`Extract script exited with code ${code}: ${extractError}`);
+                    resolve(null);
                 }
             });
         });
 
-        if (extractResult.error) {
-            console.error("Extraction failed:", extractResult.error);
-            return { extractedData: { name: "", email: null, phone: "", skills: [], education: [], experience: [] }, questions: [] };
+        if (!extractedData) {
+            return { extractedData: null, questions: [] };
         }
 
-        const extractedData = extractResult;
+        // Spawn Python process to generate questions
+        const questionProcess = spawn("python", [
+            path.join(__dirname, "../python_scripts/generate_questions.py"),
+        ]);
 
-        // Generate questions
-        const questionProcess = spawn("python", ["python_scripts/generate_questions.py"]);
         let questionOutput = "";
+        let questionError = "";
+
         questionProcess.stdout.on("data", (data) => {
             questionOutput += data.toString();
-            console.log("Question stdout:", data.toString());
-        });
-        questionProcess.stderr.on("data", (data) => {
-            console.error("Question generation error:", data.toString());
+            console.log("Question stdout:", data.toString().trim());
         });
 
-        const dataToSend = JSON.stringify(extractedData); // Debug the string being sent
-        console.log("Data sent to question generator:", dataToSend);
+        questionProcess.stderr.on("data", (data) => {
+            questionError += data.toString();
+            console.error("Question stderr:", data.toString().trim());
+        });
+
+        const dataToSend = JSON.stringify({
+            extracted_data: extractedData,
+            job_description: jobDescription || "Default job description",
+        });
+
         questionProcess.stdin.write(dataToSend);
         questionProcess.stdin.end();
 
-        const questionResult = await new Promise((resolve, reject) => {
+        const questions = await new Promise((resolve, reject) => {
             questionProcess.on("close", (code) => {
                 if (code === 0) {
                     try {
-                        const parsedQuestions = JSON.parse(questionOutput);
+                        const lines = questionOutput.split("\n").filter(line => line.trim());
+                        const jsonLine = lines.find(line => line.trim().startsWith("["));
+                        if (!jsonLine) {
+                            throw new Error("No valid JSON found in output");
+                        }
+                        const parsedQuestions = JSON.parse(jsonLine);
+                        console.log("Parsed questions:", parsedQuestions);
                         resolve(parsedQuestions);
                     } catch (err) {
-                        reject(new Error("Failed to parse question JSON: " + err.message));
+                        console.error("Failed to parse question JSON:", err.message);
+                        resolve([]);
                     }
                 } else {
-                    reject(new Error(`Question script exited with code ${code}`));
+                    console.error(`Question script exited with code ${code}: ${questionError}`);
+                    resolve([]);
                 }
             });
         });
 
-        if (questionResult.error) {
-            console.error("Question generation failed:", questionResult.error);
-            return { extractedData, questions: [] };
-        }
-
-        return { extractedData, questions: questionResult };
+        return { extractedData, questions };
     } catch (err) {
-        console.error("PDF parsing error:", err);
-        return { extractedData: { name: "", email: null, phone: "", skills: [], education: [], experience: [] }, questions: [] };
+        console.error("PDF parsing error:", err.message);
+        return {
+            extractedData: null,
+            questions: [],
+        };
     }
 };
 

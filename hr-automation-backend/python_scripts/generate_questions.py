@@ -1,151 +1,184 @@
+
 # import sys
 # import json
 # from transformers import pipeline, AutoTokenizer
 # import logging
 
-# # Set up logging
 # logging.basicConfig(level=logging.INFO, filename="generate_questions.log", filemode="a")
 # logger = logging.getLogger(__name__)
 
-# try:
-#     # Load GPT-2 tokenizer and set pad_token
-#     logger.info("Loading GPT-2 tokenizer...")
-#     tokenizer = AutoTokenizer.from_pretrained("gpt2")
-#     if tokenizer.pad_token is None:
-#         tokenizer.pad_token = tokenizer.eos_token  # Set pad_token to eos_token
-#         logger.info("Set pad_token to eos_token: {}".format(tokenizer.eos_token))
+# logger.info("Loading GPT-2 model...")
+# tokenizer = AutoTokenizer.from_pretrained("gpt2")
+# if tokenizer.pad_token is None:
+#     tokenizer.pad_token = tokenizer.eos_token
+# generator = pipeline("text-generation", model="gpt2", tokenizer=tokenizer)
 
-#     # Load GPT-2 model pipeline
-#     logger.info("Loading GPT-2 model...")
-#     generator = pipeline("text-generation", model="gpt2", tokenizer=tokenizer)
-#     logger.info("GPT-2 model loaded successfully.")
+# def generate_resume_questions(extracted_data, job_description):
+#     questions = set()
+#     prompt = (
+#         f"Generate 5 advanced-level interview questions based on this resume and job description:\n"
+#         f"Name: {extracted_data.get('name', 'Unknown')}\n"
+#         f"Skills: {', '.join(extracted_data.get('skills', ['None']))}\n"
+#         f"Education: {', '.join(extracted_data.get('education', ['None']))}\n"
+#         f"Experience: {', '.join(extracted_data.get('experience', ['None']))}\n"
+#         f"Projects: {', '.join(extracted_data.get('projects', ['None']))}\n"
+#         f"Job Description: {job_description}\n"
+#         f"The questions should be technical, experience-based, project-based, and behavioral. "
+#         f"Examples include:\n"
+#         f"- Technical: How do you handle state management in Flutter?\n"
+#         f"- Experience: Can you describe a challenging project you worked on and how you overcame the challenges?\n"
+#         f"- Project: How did you ensure accuracy in your CV Analyzer project?\n"
+#         f"- Behavioral: How do you handle constructive feedback?\n"
+#         f"List only the questions."
+#     )
 
-#     def generate_resume_questions(extracted_data):
-#         questions = []
-#         # Create a more structured prompt
-#         prompt = f"Generate 3 specific interview questions for a candidate with the following resume details:\n"
-#         prompt += f"- Name: {extracted_data['name']}\n"
-#         prompt += f"- Email: {extracted_data['email']}\n"
-#         prompt += f"- Phone: {extracted_data['phone']}\n"
-#         prompt += f"- Skills: {', '.join(extracted_data['skills'])}\n"
-#         prompt += f"- Education: {', '.join(extracted_data['education'])}\n"
-#         prompt += f"- Experience: {', '.join(extracted_data['experience'])}\n"
-#         prompt += "Questions:\n1. "
-#         logger.info(f"Generating questions with prompt: {prompt[:100]}...")
+#     result = generator(
+#         prompt,
+#         max_new_tokens=100,  # Increased to allow for more detailed questions
+#         num_return_sequences=5,  # Generate 5 questions
+#         temperature=0.9,  # Slightly lower temperature for more focused questions
+#         top_k=50,
+#         do_sample=True,
+#         truncation=True,
+#     )
 
-#         result = generator(
-#             prompt,
-#             max_length=150,
-#             max_new_tokens=75,
-#             num_return_sequences=3,
-#             temperature=0.7,
-#             truncation=True,
-#             padding=True
-#         )
+#     for res in result:
+#         text = res["generated_text"].replace(prompt, "").strip()
+#         for line in text.split("\n"):
+#             q = line.strip()
+#             if q and len(q) > 10 and q not in questions:
+#                 questions.add(q)
+#             if len(questions) >= 5:
+#                 break
 
-#         for i, res in enumerate(result, 1):
-#             question = res["generated_text"].split("\n")[0].replace(f"{i}. ", "").strip()
-#             if question and question not in questions:
-#                 questions.append(question)
+#     questions_list = list(questions)[:5]
+#     fallbacks = [
+#         "Can you explain the difference between Stateful and Stateless widgets in Flutter?",
+#         "How do you ensure a responsive UI in a Flutter app?",
+#         "Can you describe a time when you collaborated on a project with a team?",
+#         "What challenges did you face while developing a Flutter prototype, and how did you overcome them?",
+#         "How do you keep yourself updated with the latest trends in mobile app development?",
+#     ]
+#     for i in range(len(questions_list), 5):
+#         questions_list.append(fallbacks[i])
 
-#         while len(questions) < 3:
-#             key = list(extracted_data.keys())[len(questions) % len(extracted_data)]
-#             questions.append(f"What can you tell us about your {key}?")
-#         logger.info(f"Generated questions: {questions}")
-#         return questions
+#     logger.info(f"Generated questions: {questions_list}")
+#     return questions_list
 
-#     if __name__ == "__main__":
-#         # Read extracted data from stdin
-#         input_data = sys.stdin.read().strip()
-#         if not input_data:
-#             logger.error("No input data provided")
-#             print(json.dumps({"error": "No input data provided"}), file=sys.stdout)
+# if __name__ == "__main__":
+#     input_data = sys.stdin.read().strip()
+#     if not input_data:
+#         logger.error("No input data provided")
+#         print(json.dumps({"error": "No input data provided"}), file=sys.stdout)
+#         sys.exit(1)
+
+#     try:
+#         data = json.loads(input_data)
+#         if not isinstance(data, dict) or "extracted_data" not in data or "job_description" not in data:
+#             logger.error(f"Invalid input: {input_data}")
+#             print(json.dumps({"error": "Input must be a dict with 'extracted_data' and 'job_description'"}), file=sys.stdout)
 #             sys.exit(1)
+#         questions = generate_resume_questions(data["extracted_data"], data["job_description"])
+#         print(json.dumps(questions), file=sys.stdout)
 
-#         try:
-#             # Attempt to parse input as JSON
-#             extracted_data = json.loads(input_data)
-#             if not isinstance(extracted_data, dict):
-#                 raise ValueError("Input is not a valid dictionary")
-#             logger.info(f"Received extracted data: {extracted_data}")
-#             questions = generate_resume_questions(extracted_data)
-#             print(json.dumps(questions), file=sys.stdout)
-#         except json.JSONDecodeError as e:
-#             logger.error(f"Invalid JSON input: {e} - Input received: {input_data}")
-#             print(json.dumps({"error": f"Invalid JSON input: {e} - Received: {input_data}"}), file=sys.stdout)
-#             sys.exit(1)
-#         except Exception as e:
-#             logger.error(f"Error generating questions: {e}")
-#             print(json.dumps({"error": f"Failed to generate questions: {e}"}), file=sys.stdout)
-#             sys.exit(1)
 
-# except Exception as e:
-#     logger.error(f"Failed to initialize pipeline: {e}")
-#     print(json.dumps({"error": f"Pipeline initialization failed: {e}"}), file=sys.stdout)
-#     sys.exit(1)
+#     except json.JSONDecodeError as e:
+#         logger.error(f"Invalid JSON input: {e} - Input received: {input_data}")
+#         print(json.dumps({"error": f"Invalid JSON input: {e}"}), file=sys.stdout)
+#         sys.exit(1)
+#     except Exception as e:
+#         logger.error(f"Error: {e}")
+#         print(json.dumps({"error": str(e)}), file=sys.stdout)
+#         sys.exit(1)
+#     #____________________________________________________________________
+# # #_____________________________________________________
 
 
 
 import sys
 import json
-from transformers import pipeline, AutoTokenizer
 import logging
+import google.generativeai as genai
 
-# Set up logging
+# Configure logging
 logging.basicConfig(level=logging.INFO, filename="generate_questions.log", filemode="a")
 logger = logging.getLogger(__name__)
 
-try:
-    # Load GPT-2 tokenizer and set pad_token (kept for compatibility, though not used)
-    logger.info("Loading GPT-2 tokenizer...")
-    tokenizer = AutoTokenizer.from_pretrained("gpt2")
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token  # Set pad_token to eos_token
-        logger.info("Set pad_token to eos_token: {}".format(tokenizer.eos_token))
+# Set API key
+GENAI_API_KEY = "AIzaSyDFLhWGPG0dSPVHGMpP4FOIBVG8qN6weFI"
+genai.configure(api_key=GENAI_API_KEY)
 
-    # Load GPT-2 model pipeline (kept for compatibility, though not used)
-    logger.info("Loading GPT-2 model...")
-    generator = pipeline("text-generation", model="gpt2", tokenizer=tokenizer)
-    logger.info("GPT-2 model loaded successfully.")
+# Initialize the model
+model = genai.GenerativeModel("gemini-1.5-pro")
 
-    # Pre-typed questions
-    pre_typed_questions = [
-        "How will you manage this role?",
-        "What do you think about us?",
-        "Can you describe a challenge you faced and how you overcame it?"
+def generate_resume_questions(extracted_data, job_description):
+    questions = set()
+    
+    prompt = f"""
+    Generate 5 HR and technical interview questions based on the following resume and job description:
+
+    Resume: {extracted_data}
+    Job Description: {job_description}
+
+    The questions should cover:
+    - HR-related behavioral questions
+    - Technical questions based on skills and experience
+    - Problem-solving questions
+
+    List only the questions.
+    """
+    
+    try:
+        response = model.generate_content(prompt)
+        generated_questions = response.text.split("\n")
+        
+        for q in generated_questions:
+            q = q.strip()
+            if q and len(q) > 10 and q not in questions:
+                questions.add(q)
+            if len(questions) >= 5:
+                break
+    except Exception as e:
+        logger.error(f"Error generating questions with Gemini API: {e}")
+        questions = set()
+    
+    # Fallback questions if needed
+    fallbacks = [
+        "Can you explain the difference between Stateful and Stateless widgets in Flutter?",
+        "How do you ensure a responsive UI in a Flutter app?",
+        "Can you describe a time when you collaborated on a project with a team?",
+        "What challenges did you face while developing a Flutter prototype, and how did you overcome them?",
+        "How do you keep yourself updated with the latest trends in mobile app development?",
     ]
+    
+    questions_list = list(questions)[:5]
+    for i in range(len(questions_list), 5):
+        questions_list.append(fallbacks[i])
+    
+    logger.info(f"Generated questions: {questions_list}")
+    return questions_list
 
-    def generate_resume_questions(extracted_data):
-        questions = pre_typed_questions.copy()  # Use pre-typed questions
-        logger.info(f"Using pre-typed questions: {questions}")
-        return questions
+if __name__ == "__main__":
+    input_data = sys.stdin.read().strip()
+    if not input_data:
+        logger.error("No input data provided")
+        print(json.dumps({"error": "No input data provided"}), file=sys.stdout)
+        sys.exit(1)
 
-    if __name__ == "__main__":
-        # Read extracted data from stdin
-        input_data = sys.stdin.read().strip()
-        if not input_data:
-            logger.error("No input data provided")
-            print(json.dumps({"error": "No input data provided"}), file=sys.stdout)
+    try:
+        data = json.loads(input_data)
+        if not isinstance(data, dict) or "extracted_data" not in data or "job_description" not in data:
+            logger.error(f"Invalid input: {input_data}")
+            print(json.dumps({"error": "Input must be a dict with 'extracted_data' and 'job_description'"}), file=sys.stdout)
             sys.exit(1)
-
-        try:
-            # Attempt to parse input as JSON
-            extracted_data = json.loads(input_data)
-            if not isinstance(extracted_data, dict):
-                raise ValueError("Input is not a valid dictionary")
-            logger.info(f"Received extracted data: {extracted_data}")
-            questions = generate_resume_questions(extracted_data)
-            print(json.dumps(questions), file=sys.stdout)
-        except json.JSONDecodeError as e:
-            logger.error(f"Invalid JSON input: {e} - Input received: {input_data}")
-            print(json.dumps({"error": f"Invalid JSON input: {e} - Received: {input_data}"}), file=sys.stdout)
-            sys.exit(1)
-        except Exception as e:
-            logger.error(f"Error generating questions: {e}")
-            print(json.dumps({"error": f"Failed to generate questions: {e}"}), file=sys.stdout)
-            sys.exit(1)
-
-except Exception as e:
-    logger.error(f"Failed to initialize pipeline: {e}")
-    print(json.dumps({"error": f"Pipeline initialization failed: {e}"}), file=sys.stdout)
-    sys.exit(1)
+        
+        questions = generate_resume_questions(data["extracted_data"], data["job_description"])
+        print(json.dumps(questions), file=sys.stdout)
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid JSON input: {e} - Input received: {input_data}")
+        print(json.dumps({"error": f"Invalid JSON input: {e}"}), file=sys.stdout)
+        sys.exit(1)
+    except Exception as e:
+        logger.error(f"Error: {e}")
+        print(json.dumps({"error": str(e)}), file=sys.stdout)
+        sys.exit(1)

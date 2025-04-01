@@ -44,3 +44,4 @@ if __name__ == "__main__":
     answer = sys.argv[2]
     score = evaluate_response(question, answer)
     print(f"Evaluated score: {score}/10")
+

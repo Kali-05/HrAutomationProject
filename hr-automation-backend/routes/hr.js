@@ -1,25 +1,112 @@
 const express = require("express");
 const Session = require("../models/Session");
 const Applicant = require("../models/Applicant");
+const HR = require("../models/HR"); // Import HR model
 const { fetchResumes, sendEmail } = require("../utils/email");
-const { generateQuestions } = require("../utils/questionGenerator");
-const router = express.Router();
 const { parseResume } = require("../utils/pdfParser");
+const router = express.Router();
+const jwt = require("jsonwebtoken");
+const { spawn } = require("child_process");
+
+console.log("HR routes loaded");
+
 // Define delay function to avoid rate limits
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Helper function to normalize email (extract email address from "Name <email>" format)
+// Updated normalizeEmail to extract just the email address
 const normalizeEmail = (email) => {
     const match = email.match(/<(.+?)>/);
-    return match ? match[1] : email.trim();
+    const extractedEmail = match ? match[1] : email.trim();
+    return extractedEmail.toLowerCase();
 };
+
+// HR Signup
+router.post("/signup", async (req, res) => {
+    try {
+        const { email, password, name } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
+
+        const existingHR = await HR.findOne({ email });
+        if (existingHR) {
+            return res.status(400).json({ error: "HR with this email already exists" });
+        }
+
+        const hr = new HR({ email, password, name: name || "HR" });
+        await hr.save();
+
+        const token = jwt.sign(
+            { id: hr._id, email: hr.email, role: "hr" },
+            process.env.JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
+        res.json({
+            success: true,
+            token,
+            hr: { email: hr.email, name: hr.name },
+        });
+    } catch (err) {
+        console.error("HR signup error:", err.message);
+        res.status(500).json({ error: "Failed to sign up" });
+    }
+});
+
+// HR Login
+router.post("/login", async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        if (!email || !password) {
+            return res.status(400).json({ error: "Email and password are required" });
+        }
+
+        const hr = await HR.findOne({ email });
+        if (!hr) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const isMatch = await hr.comparePassword(password);
+        if (!isMatch) {
+            return res.status(401).json({ error: "Invalid email or password" });
+        }
+
+        const token = jwt.sign(
+            { id: hr._id, email: hr.email, role: "hr" },
+            process.env.JWT_SECRET,
+            { expiresIn: "1h" }
+        );
+
+        res.json({
+            success: true,
+            token,
+            hr: { email: hr.email, name: hr.name },
+        });
+    } catch (err) {
+        console.error("HR login error:", err.message);
+        res.status(500).json({ error: "Failed to log in" });
+    }
+});
 
 router.post("/create-session", async (req, res) => {
     try {
+        console.log("Create session endpoint hit");
         const { hrEmail, startDate, endDate, jobDescription, testDateTime } = req.body;
-        console.log("Creating session with:", { hrEmail, startDate, endDate });
-        const session = new Session({ hrEmail, startDate, endDate, jobDescription, testDateTime });
+        console.log("Creating session with:", { hrEmail, startDate, endDate, jobDescription, testDateTime });
+
+        if (!hrEmail || !startDate || !endDate || !jobDescription || !testDateTime) {
+            return res.status(400).json({ error: "All fields (hrEmail, startDate, endDate, jobDescription, testDateTime) are required" });
+        }
+
+        const session = new Session({
+            hrEmail,
+            startDate,
+            endDate,
+            jobDescription,
+            testDateTime,
+        });
         await session.save();
+        console.log("Session saved initially:", session._id);
 
         if (new Date(endDate) <= new Date()) {
             console.log("Fetching resumes for range:", startDate, "to", endDate);
@@ -28,6 +115,7 @@ router.post("/create-session", async (req, res) => {
 
             const uniqueResumes = [];
             const seenEmails = new Set();
+
             for (const resume of resumes) {
                 const normalizedEmail = normalizeEmail(resume.email);
                 if (!seenEmails.has(normalizedEmail)) {
@@ -40,83 +128,73 @@ router.post("/create-session", async (req, res) => {
 
             for (const { email: normalizedEmail, pdfData } of uniqueResumes) {
                 console.log("Processing normalized email:", normalizedEmail);
-                const { extractedData, questions } = await parseResume(pdfData);
+                const { extractedData, questions } = await parseResume(pdfData, jobDescription);
+                console.log("Extracted data:", extractedData);
+                console.log("Questions:", questions);
                 if (!extractedData) {
                     console.log("Skipping email due to missing extracted data:", normalizedEmail);
                     continue;
                 }
 
                 const existingApplicant = await Applicant.findOne({ email: normalizedEmail });
+                const password = Math.random().toString(36).slice(-8);
+                console.log("Generated password for", normalizedEmail, ":", password);
+
                 if (existingApplicant) {
                     console.log(`Applicant already exists for ${normalizedEmail}, sending reminder email`);
-                    const password = Math.random().toString(36).slice(-8); // Generate new password
-                    existingApplicant.password = password; // Update password (will be hashed by pre-save hook)
+                    existingApplicant.password = password;
+                    existingApplicant.questions = questions || [];
                     await existingApplicant.save();
-
-                    const emailBody = `
-                        Dear Applicant,
-
-                        Your account already exists. Here are your updated login credentials and questions:
-
-                        **Login Credentials:**
-                        - Email: ${normalizedEmail}
-                        - Password: ${password}
-
-                        **Questions:**
-                        ${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}
-
-                        Please log in at http://localhost:3000/applicant-login to submit your answers.
-
-                        Best regards,
-                        HR Team
-                    `;
-                    console.log(`Attempting to send reminder email to ${normalizedEmail}`);
-                    await sendEmail(normalizedEmail, "Interview Invite - Updated Credentials", emailBody);
-                    await delay(1000); // 1-second delay to avoid rate limits
+                    console.log("Updated applicant:", existingApplicant._id);
+                    session.applicants.push(existingApplicant._id);
                 } else {
-                    // New applicant
-                    const password = Math.random().toString(36).slice(-8);
                     const applicant = new Applicant({
                         email: normalizedEmail,
-                        password, // Will be hashed by the pre-save hook
-                        extractedData,
-                        questions,
+                        password,
+                        resumeData: extractedData,
+                        questions: questions || [],
+                        resumePDF: pdfData,
                     });
+                    console.log("Saving new applicant with password:", password);
                     await applicant.save();
+                    console.log("Saved applicant:", applicant._id);
                     session.applicants.push(applicant._id);
                     console.log("Added applicant:", normalizedEmail);
-
-                    const emailBody = `
-                        Dear Applicant,
-
-                        You have been invited to participate in an interview process. Below are your login credentials and the questions you need to answer:
-
-                        **Login Credentials:**
-                        - Email: ${normalizedEmail}
-                        - Password: ${password}
-
-                        **Questions:**
-                        ${questions.map((q, i) => `${i + 1}. ${q}`).join("\n")}
-
-                        Please log in at http://localhost:3000/applicant-login to submit your answers.
-
-                        Best regards,
-                        HR Team
-                    `;
-                    console.log(`Attempting to send invite email to ${normalizedEmail}`);
-                    await sendEmail(normalizedEmail, "Interview Invite - Login Credentials and Questions", emailBody);
-                    await delay(1000); // 1-second delay to avoid rate limits
                 }
+
+                const emailBody = `
+                    Dear Applicant,
+
+                    You have been invited to participate in an interview process. Below are your login credentials and the questions you need to answer:
+
+                    **Login Credentials:**
+                    - Email: ${normalizedEmail}
+                    - Password: ${password}
+
+                    **Questions:**
+                    ${questions?.map((q, i) => `${i + 1}. ${q}`).join("\n") || "No questions assigned yet"}
+
+                    Please log in at http://localhost:3000/ to submit your answers.
+
+                    Best regards,
+                    HR Team
+                `;
+                console.log(`Attempting to send invite email to ${normalizedEmail}`);
+                await sendEmail(normalizedEmail, "Interview Invite - Login Credentials and Questions", emailBody);
+                await delay(1000);
             }
+
             await session.save();
             console.log("Session saved with applicants:", session.applicants.length);
         } else {
             console.log("End date is in the future, skipping resume fetch.");
         }
-        res.json({ success: true });
+
+        const updatedApplicants = await Applicant.find({ _id: { $in: session.applicants } });
+        res.json({ success: true, sessionId: session._id, applicants: updatedApplicants });
     } catch (err) {
-        console.error("Error creating session:", err.message);
-        res.status(500).json({ error: "Failed to create session" });
+        console.error("Error creating session:", err.message, err.stack);
+        res.status(500).json({ error: "Failed to create session", details: err.message });
     }
 });
 
@@ -150,5 +228,28 @@ router.get("/applicant-resume/:id", async (req, res) => {
         res.status(500).json({ error: "Failed to fetch resume" });
     }
 });
-module.exports = router;
+// Fetch questions for a session
+router.get("/session/:sessionId/questions", async (req, res) => {
+    try {
+        const sessionId = req.params.sessionId;
+        const session = await Session.findById(sessionId).populate("applicants");
 
+        if (!session) {
+            return res.status(404).json({ error: "Session not found" });
+        }
+
+        // Fetch questions from the first applicant (assuming all applicants have the same questions)
+        const applicant = session.applicants[0];
+        if (!applicant) {
+            return res.status(404).json({ error: "No applicants found in this session" });
+        }
+
+        const questions = applicant.questions || [];
+        res.json(questions);
+    } catch (err) {
+        console.error("Error fetching session questions:", err.message);
+        res.status(500).json({ error: "Failed to fetch session questions" });
+    }
+});
+
+module.exports = router;

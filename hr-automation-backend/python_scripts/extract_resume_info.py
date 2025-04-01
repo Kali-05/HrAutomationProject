@@ -3,73 +3,114 @@ import spacy
 import json
 import logging
 import re
+from nameparser import HumanName
 
+# Set up logging
 logging.basicConfig(level=logging.INFO, filename="extract_resume.log", filemode="a")
 logger = logging.getLogger(__name__)
 
+# Load spaCy model
 nlp = spacy.load("en_core_web_sm")
 
-def extract_info_from_text(text):
-    logger.info(f"Processing text: {text[:100]}...")
-    doc = nlp(text)
+def extract_name(text):
+    """
+    Extracts the candidate's name by:
+    1. Skipping empty lines at the beginning.
+    2. Checking the first few valid lines for a probable name.
+    3. Falling back to Spacy's Named Entity Recognition (NER) if needed.
+    """
+    lines = text.split("\n")
 
-    entities = {
-        "name": "",
-        "email": "",
-        "phone": "",
-        "skills": [],
-        "education": [],
-        "experience": []
+    # Step 1: Skip empty lines
+    valid_lines = [line.strip() for line in lines if line.strip()]  # Remove empty lines
+
+    # Step 2: Check first 5 valid lines for a name
+    for line in valid_lines[:5]:  
+        words = line.split()
+        if len(words) <= 3 and all(w[0].isupper() for w in words):  # Capitalized words like names
+            return HumanName(line).full_name
+
+    # Step 3: Use Spacy NLP as a last resort
+    doc = nlp(text)
+    for ent in doc.ents:
+        if ent.label_ == "PERSON":
+            return ent.text  # Extracted person's name
+
+    return "Unknown"
+
+def extract_email(text):
+    match = re.search(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", text)
+    return match.group(0) if match else "Not Found"
+
+def extract_phone(text):
+    match = re.search(r"\+?\d[\d -]{8,}\d", text)
+    return match.group(0) if match else "Not Found"
+
+def extract_skills(text):
+    skillset = {"java", "sql", "html", "css", "javascript", "python", "c++", "flutter", "dart"}
+    words = text.lower().split()
+    return list(skillset.intersection(words))
+
+def extract_education(text):
+    edu_keywords = ["education", "college", "university", "bachelor", "master"]
+    return [line.strip() for line in text.split("\n") if any(keyword in line.lower() for keyword in edu_keywords)]
+
+def extract_experience(text):
+    exp_keywords = ["experience", "internship", "worked", "developed"]
+    return [line.strip() for line in text.split("\n") if any(keyword in line.lower() for keyword in exp_keywords)]
+
+def extract_projects(text):
+    """
+    Extracts projects along with their descriptions from the resume.
+    Looks for the 'Projects' section and captures details until another section starts.
+    """
+    lines = text.split("\n")
+    projects = []
+    capturing = False
+    project_data = ""
+
+    for line in lines:
+        clean_line = line.strip()
+
+        # Step 1: Detect "Projects" section
+        if "projects" in clean_line.lower():
+            capturing = True
+            continue  # Skip the header itself
+        
+        # Step 2: Stop capturing if we hit another section
+        if capturing and (clean_line.isupper() or "awards" in clean_line.lower() or "education" in clean_line.lower()):
+            break  # Stop when another major section starts
+
+        # Step 3: Collect project details
+        if capturing and clean_line:
+            project_data += clean_line + " "
+
+    # Step 4: Process and split into individual projects
+    project_list = project_data.split("•")  # Bullet points indicate separate projects
+    for project in project_list:
+        project = project.strip()
+        if project:
+            projects.append(project)
+
+    return projects
+
+def extract_resume_info(text):
+    logger.info(f"Processing text: {text[:100]}...")
+
+    extracted_data = {
+        "name": extract_name(text),
+        "email": extract_email(text),
+        "phone": extract_phone(text),
+        "skills": extract_skills(text),
+        "education": extract_education(text),
+        "experience": extract_experience(text),
+        "projects": extract_projects(text)  # Add project extraction
     }
 
-    email_pattern = r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}"
-    emails = re.findall(email_pattern, text)
-    if emails:
-        entities["email"] = emails[0]
-        logger.info(f"Found email: {entities['email']}")
+    # Log extracted data
+    logger.info(f"Extracted entities: {extracted_data}")
 
-    phone_pattern = r"\+?\d{1,3}[-.\s]?\d{3,5}[-.\s]?\d{4,5}"
-    phones = re.findall(phone_pattern, text)
-    if phones:
-        entities["phone"] = phones[0]
-        logger.info(f"Found phone: {entities['phone']}")
-
-    for ent in doc.ents:
-        if ent.label_ == "PERSON" and len(ent.text.split()) > 1 and not entities["name"]:  # Ensure it's a full name
-            entities["name"] = ent.text
-            logger.info(f"Found name via spaCy: {entities['name']}")
-            break
-    if not entities["name"]:
-        lines = [line.strip() for line in text.split("\n") if line.strip() and len(line.split()) > 1]
-        if lines:
-            entities["name"] = lines[0]
-            logger.info(f"Found name via first line: {entities['name']}")
-
-    skill_keywords = ["python", "java", "sql", "html", "css", "javascript", "react", "node", "mongodb"]
-    text_lower = text.lower()
-    if "skill" in text_lower or "skills" in text_lower:
-        skills = [word for word in skill_keywords if word in text_lower]
-        entities["skills"].extend(skills)
-        logger.info(f"Found skills: {entities['skills']}")
-
-    education_keywords = ["education", "bachelor", "master", "degree", "university", "college"]
-    education_lines = [line.strip() for line in text.split("\n") if any(key in line.lower() for key in education_keywords)]
-    entities["education"] = education_lines[:2]
-    logger.info(f"Found education: {entities['education']}")
-
-    experience_keywords = ["experience", "worked", "employed", "position", "role"]
-    experience_lines = [line.strip() for line in text.split("\n") if any(key in line.lower() for key in experience_keywords)]
-    entities["experience"] = experience_lines[:2]
-    logger.info(f"Found experience: {entities['experience']}")
-
-    for key in entities:
-        if isinstance(entities[key], list):
-            entities[key] = list(dict.fromkeys(entities[key]))
-        elif not entities[key]:
-            entities[key] = ""
-
-    logger.info(f"Extracted entities: {entities}")
-    return entities
+    return extracted_data
 
 if __name__ == "__main__":
     text = sys.stdin.read().strip()
@@ -78,5 +119,5 @@ if __name__ == "__main__":
         print(json.dumps({"error": "No text data provided"}), file=sys.stdout)
         sys.exit(1)
 
-    entities = extract_info_from_text(text)
+    entities = extract_resume_info(text)
     print(json.dumps(entities), file=sys.stdout)
